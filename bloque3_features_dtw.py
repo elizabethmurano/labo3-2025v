@@ -1,9 +1,16 @@
 # === BLOQUE 3 === FEATURE ENGINEERING + CLUSTERING DTW EN VM ===
 
+# Instalar librerías necesarias si estás en un entorno Jupyter Notebook
+!pip install gcsfs tslearn --quiet
+
+# === IMPORTACIONES ===
 import pandas as pd
 import numpy as np
 import gc
 import gcsfs
+from tslearn.clustering import TimeSeriesKMeans
+from tslearn.preprocessing import TimeSeriesScalerMeanVariance
+from tslearn.utils import to_time_series_dataset
 
 # === CONFIGURACIÓN DE BUCKET Y PROYECTO ===
 BUCKET = 'bukeli'
@@ -18,6 +25,7 @@ fs = gcsfs.GCSFileSystem(project=PROYECTO)
 print("📥 Cargando df_panel.parquet desde bucket...")
 with fs.open(INPUT_PATH, 'rb') as f:
     df_pred = pd.read_parquet(f)
+
 
 # === FEATURES TEMPORALES ===
 df_pred['mes'] = df_pred['periodo'] % 100
@@ -91,9 +99,6 @@ df_pred['antiguedad_producto_meses'] = df_pred['periodo'] - primera_fecha_prod
 df_pred['producto_preexistente'] = (primera_fecha_prod == df_pred['periodo'].min()).astype(int)
 
 # === CLUSTERING DTW ===
-from tslearn.clustering import TimeSeriesKMeans
-from tslearn.preprocessing import TimeSeriesScalerMeanVariance
-from tslearn.utils import to_time_series_dataset
 
 print("📊 Ejecutando clustering DTW por producto...")
 df_ts = df_pred.groupby(['product_id', 'periodo'])['tn'].sum().reset_index()
