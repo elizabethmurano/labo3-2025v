@@ -1,7 +1,24 @@
 # === BLOQUE 3 === FEATURE ENGINEERING + CLUSTERING DTW EN VM ===
 
-# Instalar librerías necesarias si estás en un entorno Jupyter Notebook
-!pip install gcsfs tslearn --quiet
+import subprocess
+import sys
+
+# === VALIDACIÓN Y INSTALACIÓN DE DEPENDENCIAS ===
+def instalar_paquete(paquete, version=None):
+    try:
+        if version:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", f"{paquete}=={version}"])
+        else:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", paquete])
+    except Exception as e:
+        print(f"❌ Error instalando {paquete}: {e}")
+
+# Forzar versiones compatibles si da error de numpy
+instalar_paquete("numpy", "1.24.4")
+instalar_paquete("scipy", "1.10.1")
+instalar_paquete("scikit-learn", "1.3.2")
+instalar_paquete("tslearn")
+instalar_paquete("gcsfs")
 
 # === IMPORTACIONES ===
 import pandas as pd
