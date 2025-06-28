@@ -1,26 +1,31 @@
-# === BLOQUE 4: ENTRENAMIENTO LIGHTGBM PARA PREDICCIÓN DE CLASE ===
+# === BLOQUE 4: Entrenamiento LightGBM para predecir clase (tn_mes+2 - tn) ===
 
 import pandas as pd
 import numpy as np
 import lightgbm as lgb
 import gc
+import gcsfs
+import joblib
 from sklearn.model_selection import train_test_split
 from lightgbm.callback import early_stopping, log_evaluation
-import gcsfs
 
-# === CONFIGURACIÓN DE BUCKET Y PROYECTO ===
+# === CONFIGURACIÓN ===
 BUCKET = 'bukeli'
 PROYECTO = 'carbide-crowbar-463114-d5'
 INPUT_PATH = f'gs://{BUCKET}/panel/df_panel_features.parquet'
-MODEL_OUTPUT = f'gs://{BUCKET}/modelos/modelo_lgbm.txt'
+OUTPUT_PATH = f'gs://{BUCKET}/panel/df_pred_con_features.parquet'
+FEATURES_PATH = f'gs://{BUCKET}/modelo/features_lgbm.pkl'
+MODEL_PATH = f'gs://{BUCKET}/modelo/modelo_lgbm.txt'
+
+# === INICIALIZAR SISTEMA DE ARCHIVOS ===
+fs = gcsfs.GCSFileSystem(project=PROYECTO)
 
 # === CARGAR PANEL CON FEATURES DESDE GCS ===
-print("📥 Cargando dataset con features desde bucket...")
-fs = gcsfs.GCSFileSystem(project=PROYECTO)
+print("📥 Cargando df_panel_features.parquet desde bucket...")
 with fs.open(INPUT_PATH, 'rb') as f:
     df_pred = pd.read_parquet(f)
 
-# === OPTIMIZAR TIPOS ===
+# === OPTIMIZACIÓN DE TIPOS ===
 def optimize_dtypes(df):
     for col in df.columns:
         if df[col].dtype == 'int64':
@@ -36,33 +41,47 @@ def optimize_dtypes(df):
 
 df_pred = optimize_dtypes(df_pred)
 
-# === FILTRADO Y SPLIT ===
+# === QUITAR COLUMNAS NO NUMÉRICAS O NO ÚTILES ===
+df_pred = df_pred.drop(columns=['fecha'], errors='ignore')
 df_pred['periodo_int'] = df_pred['periodo'].astype(int)
 ultimos_periodos = sorted(df_pred['periodo_int'].unique())[-2:]
+
+# === FILTRAR PARA TRAINING ===
 df_train = df_pred[~df_pred['periodo_int'].isin(ultimos_periodos)].copy()
 df_train = df_train[df_train['clase'].notnull()]
 
-# === DEFINIR FEATURES ===
+# === FEATURES ===
 features = [
     col for col in df_train.columns
     if col not in ['tn_mes+2', 'tn', 'clase', 'product_id', 'customer_id', 'periodo', 'periodo_int']
     and df_train[col].dtype != 'object'
 ]
 
-# Eliminar columna 'fecha' si existe
-if 'fecha' in df_train.columns:
-    df_train = df_train.drop(columns=['fecha'])
-    
 X = df_train[features].copy()
 y = df_train['clase'].copy()
 
-# === SPLIT TEMPORAL ===
-print("🧪 Dividiendo train/val...")
-X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.15, shuffle=False)
-del X, y, df_train
+# === GUARDAR BACKUP EN BUCKET ===
+print("💾 Guardando df_pred_con_features.parquet en bucket...")
+with fs.open(OUTPUT_PATH, 'wb') as f:
+    df_pred.to_parquet(f, index=False)
+
+# === GUARDAR LISTA DE FEATURES ===
+print("💾 Guardando lista de features...")
+with fs.open(FEATURES_PATH, 'wb') as f:
+    joblib.dump(features, f)
+
+del df_pred, df_train
 gc.collect()
 
-# === PARÁMETROS LIGHTGBM ===
+# === SPLIT TEMPORAL ===
+print("🔀 Split temporal de entrenamiento/validación")
+print("Shape X:", X.shape)
+print("Shape y:", y.shape)
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.15, shuffle=False)
+del X, y
+gc.collect()
+
+# === PARÁMETROS LGBM ===
 params = {
     'objective': 'regression',
     'metric': 'rmse',
@@ -82,13 +101,11 @@ params = {
     'max_bin': 512
 }
 
-# === DATASETS LIGHTGBM ===
+# === ENTRENAMIENTO ===
 lgb_train = lgb.Dataset(X_train, y_train, free_raw_data=False)
 lgb_eval = lgb.Dataset(X_val, y_val, reference=lgb_train, free_raw_data=False)
 del X_train, X_val, y_train, y_val
-gc.collect()
 
-# === ENTRENAMIENTO ===
 print("🚀 Entrenando modelo LightGBM...")
 model = lgb.train(
     params,
@@ -100,14 +117,7 @@ model = lgb.train(
 del lgb_train, lgb_eval
 gc.collect()
 
-# === GUARDAR MODELO LOCAL Y EN GCS ===
-print("💾 Guardando modelo LightGBM localmente...")
-model.save_model('modelo_lgbm.txt')
-
-print(f"📤 Subiendo modelo a bucket: {MODEL_OUTPUT} ...")
-with fs.open(MODEL_OUTPUT, 'w') as f_out:
-    with open('modelo_lgbm.txt', 'r') as f_in:
-        f_out.write(f_in.read())
-
-print("✅ Entrenamiento finalizado y modelo guardado en GCS.")
-
+# === GUARDAR MODELO ENTRENADO EN GCS ===
+print("💾 Guardando modelo LightGBM en bucket...")
+model.save_model(MODEL_PATH)
+print("✅ Entrenamiento finalizado.")
